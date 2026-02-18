@@ -1,0 +1,301 @@
+{
+  "name": "Slack to Freshdesk Intake and Thread Sync",
+  "nodes": [
+    {
+      "id": "slack_trigger",
+      "name": "Slack Trigger - New Message",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [120, 220],
+      "parameters": {
+        "event": "message.channels"
+      }
+    },
+    {
+      "id": "normalize_message",
+      "name": "Normalize Message Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [360, 220],
+      "parameters": {
+        "language": "JavaScript",
+        "jsCode": "const out = items.map((item) => {\n  const msg = item.json.event || item.json;\n  const files = msg.files || [];\n  const links = (msg.text || '').match(/https?:\\/\\/\\S+/g) || [];\n\n  return {\n    json: {\n      channel_id: msg.channel || msg.channel_id,\n      message_ts: msg.ts || msg.message_ts,\n      thread_ts: msg.thread_ts || msg.ts || msg.message_ts,\n      user_id: msg.user || msg.user_id,\n      text: msg.text || '',\n      links,\n      files: files.map((f) => ({\n        id: f.id,\n        name: f.name,\n        mimetype: f.mimetype,\n        url_private: f.url_private\n      }))\n    }\n  };\n});\n\nreturn out;"
+      }
+    },
+    {
+      "id": "openai_classify",
+      "name": "OpenAI - Classify, Rewrite, Prioritize",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [620, 220],
+      "parameters": {
+        "resource": "chat",
+        "operation": "complete"
+      }
+    },
+    {
+      "id": "is_valid_issue",
+      "name": "IF - Valid Issue",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 220],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.is_issue}}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "dedupe_check",
+      "name": "HTTP - Dedupe Service",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 130],
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-DEDUPE-SERVICE/check",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "is_duplicate",
+      "name": "IF - Duplicate Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 130],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.is_duplicate}}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "create_ticket",
+      "name": "Freshdesk - Create Ticket",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1580, 70],
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOURDOMAIN.freshdesk.com/api/v2/tickets",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "save_mapping",
+      "name": "Postgres - Save Thread Mapping",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1820, 70],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ticket_thread_map (ticket_id, channel_id, thread_ts) VALUES ({{$json.id}}, '{{$json.channel_id}}', '{{$json.thread_ts}}') ON CONFLICT (ticket_id) DO NOTHING;"
+      }
+    },
+    {
+      "id": "slack_ticket_created",
+      "name": "Slack - Reply Ticket Created",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [2060, 70],
+      "parameters": {
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "slack_duplicate",
+      "name": "Slack - Reply Duplicate",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1580, 190],
+      "parameters": {
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "slack_clarify",
+      "name": "Slack - Request Clarification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1100, 330],
+      "parameters": {
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "freshdesk_webhook",
+      "name": "Webhook - Freshdesk Ticket Event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [120, 520],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "freshdesk-ticket-events"
+      }
+    },
+    {
+      "id": "mapping_lookup",
+      "name": "Postgres - Lookup Slack Thread",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [360, 520],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT channel_id, thread_ts FROM ticket_thread_map WHERE ticket_id = {{$json.ticket_id}}"
+      }
+    },
+    {
+      "id": "slack_ticket_update",
+      "name": "Slack - Reply Ticket Update",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [620, 520],
+      "parameters": {
+        "resource": "message",
+        "operation": "post"
+      }
+    }
+  ],
+  "connections": {
+    "Slack Trigger - New Message": {
+      "main": [
+        [
+          {
+            "node": "Normalize Message Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Message Payload": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Classify, Rewrite, Prioritize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Classify, Rewrite, Prioritize": {
+      "main": [
+        [
+          {
+            "node": "IF - Valid Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Valid Issue": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Dedupe Service",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack - Request Clarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Dedupe Service": {
+      "main": [
+        [
+          {
+            "node": "IF - Duplicate Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Duplicate Found": {
+      "main": [
+        [
+          {
+            "node": "Slack - Reply Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Freshdesk - Create Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freshdesk - Create Ticket": {
+      "main": [
+        [
+          {
+            "node": "Postgres - Save Thread Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres - Save Thread Mapping": {
+      "main": [
+        [
+          {
+            "node": "Slack - Reply Ticket Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Freshdesk Ticket Event": {
+      "main": [
+        [
+          {
+            "node": "Postgres - Lookup Slack Thread",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres - Lookup Slack Thread": {
+      "main": [
+        [
+          {
+            "node": "Slack - Reply Ticket Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
