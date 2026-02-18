@@ -1,0 +1,319 @@
+{
+  "name": "Freshdesk KB Draft, Review, and Publish",
+  "nodes": [
+    {
+      "id": "daily_trigger",
+      "name": "Cron - Daily KB Candidate Scan",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [120, 120],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyDay",
+              "hour": 8,
+              "minute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetch_closed_tickets",
+      "name": "Freshdesk - Fetch Closed Tickets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [360, 120],
+      "parameters": {
+        "method": "GET",
+        "url": "https://YOURDOMAIN.freshdesk.com/api/v2/search/tickets?query=\"status:5\""
+      }
+    },
+    {
+      "id": "detect_recurring",
+      "name": "OpenAI - Detect Recurring Patterns",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [620, 120],
+      "parameters": {
+        "resource": "chat",
+        "operation": "complete"
+      }
+    },
+    {
+      "id": "if_recurring",
+      "name": "IF - Recurring Issue",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 120],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.is_recurring}}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "find_existing_kb",
+      "name": "Freshdesk - Search Existing KB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1100, 80],
+      "parameters": {
+        "method": "GET",
+        "url": "https://YOURDOMAIN.freshdesk.com/api/v2/solutions/articles?search={{$json.topic}}"
+      }
+    },
+    {
+      "id": "draft_or_update_kb",
+      "name": "OpenAI - Draft or Update KB",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1340, 80],
+      "parameters": {
+        "resource": "chat",
+        "operation": "complete"
+      }
+    },
+    {
+      "id": "save_kb_draft",
+      "name": "Freshdesk - Save KB Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1580, 80],
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOURDOMAIN.freshdesk.com/api/v2/solutions/articles",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "post_review_message",
+      "name": "Slack - Send KB Review Request",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1820, 80],
+      "parameters": {
+        "resource": "message",
+        "operation": "post"
+      }
+    },
+    {
+      "id": "approval_webhook",
+      "name": "Webhook - Slack KB Approval",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [120, 340],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kb-approval"
+      }
+    },
+    {
+      "id": "validate_reviewer_role",
+      "name": "IF - Reviewer Is Authorized",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [360, 340],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.reviewer_role}}",
+              "operation": "equal",
+              "value2": "support_lead"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if_approve",
+      "name": "IF - Approval Action",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [620, 340],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.action}}",
+              "operation": "equal",
+              "value2": "approve"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "publish_kb",
+      "name": "Freshdesk - Publish KB Article",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [860, 300],
+      "parameters": {
+        "method": "PUT",
+        "url": "https://YOURDOMAIN.freshdesk.com/api/v2/solutions/articles/{{$json.article_id}}",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "update_draft",
+      "name": "Freshdesk - Update Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [860, 390],
+      "parameters": {
+        "method": "PUT",
+        "url": "https://YOURDOMAIN.freshdesk.com/api/v2/solutions/articles/{{$json.article_id}}",
+        "sendBody": true
+      }
+    },
+    {
+      "id": "notify_unauthorized",
+      "name": "Slack - Unauthorized Reviewer",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [620, 460],
+      "parameters": {
+        "resource": "message",
+        "operation": "post"
+      }
+    }
+  ],
+  "connections": {
+    "Cron - Daily KB Candidate Scan": {
+      "main": [
+        [
+          {
+            "node": "Freshdesk - Fetch Closed Tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freshdesk - Fetch Closed Tickets": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Detect Recurring Patterns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Detect Recurring Patterns": {
+      "main": [
+        [
+          {
+            "node": "IF - Recurring Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Recurring Issue": {
+      "main": [
+        [
+          {
+            "node": "Freshdesk - Search Existing KB",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Freshdesk - Search Existing KB": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Draft or Update KB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Draft or Update KB": {
+      "main": [
+        [
+          {
+            "node": "Freshdesk - Save KB Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freshdesk - Save KB Draft": {
+      "main": [
+        [
+          {
+            "node": "Slack - Send KB Review Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Slack KB Approval": {
+      "main": [
+        [
+          {
+            "node": "IF - Reviewer Is Authorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Reviewer Is Authorized": {
+      "main": [
+        [
+          {
+            "node": "IF - Approval Action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack - Unauthorized Reviewer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Approval Action": {
+      "main": [
+        [
+          {
+            "node": "Freshdesk - Publish KB Article",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Freshdesk - Update Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
